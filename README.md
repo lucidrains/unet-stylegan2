@@ -1,4 +1,4 @@
-# UNet Stylegan2
+## UNet Stylegan2
 
 An implementation of Stylegan2 with UNet Discriminator
 
