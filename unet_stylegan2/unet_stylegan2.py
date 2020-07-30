@@ -546,9 +546,9 @@ class Discriminator(nn.Module):
         self.conv = double_conv(filters[-1], filters[-1])
 
         dec_chan_in_out = chan_in_out[:-1][::-1]
-        dec_chan_in_out[-1][0] = 1
 
         self.up_blocks = nn.ModuleList(list(map(lambda c: UpBlock(c[1] * 2, c[0]), dec_chan_in_out)))
+        self.conv_out = nn.Conv2d(3, 1, 1)
 
     def forward(self, x):
         b, *_ = x.shape
@@ -569,8 +569,8 @@ class Discriminator(nn.Module):
         for (up_block, res) in zip(self.up_blocks, residuals[:-1][::-1]):
             x = up_block(x, res)
 
-        dec_out = x
-        return enc_out.squeeze(), dec_out
+        dec_out = self.conv_out(x)
+        return enc_out.squeeze(), dec_out.sigmoid()
 
 class StyleGAN2(nn.Module):
     def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, attn_layers = [], no_const = False):
