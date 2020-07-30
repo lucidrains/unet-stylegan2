@@ -1,6 +1,6 @@
 ## UNet Stylegan2
 
-An implementation of Stylegan2 with UNet Discriminator
+An implementation of Stylegan2 with UNet Discriminator. This repository works largely the same way as <a href="https://github.com/lucidrains/stylegan2-pytorch">Stylegan2 Pytorch</a>. Simply replace all the `stylegan2_pytorch` command with `unet_pytorch` instead. Will turn this into a full blown repository if experiments are successful.
 
 ## Citations
 

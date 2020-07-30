@@ -200,13 +200,14 @@ def cutmix_coordinates(height, width, alpha = 1.):
     y0 = int(np.round(max(cy - h / 2, 0)))
     y1 = int(np.round(min(cy + h / 2, height)))
 
-    return (slice(y0, y1), slice(x0, x1)), lam
+    return ((y0, y1), (x0, x1)), lam
 
-def cutmix(source, targets, alpha = 1.):
+def cutmix(source, target, coors, alpha = 1.):
     *_, h, w = source.shape
-    (y_slice, x_slice), lam = cutmix_coordinates(h, w, alpha)
-    source[:, :, y_slice, x_slice] = targets[:, :, y_slice, x_slice]
-    return source
+    source, target = map(torch.clone, (source, target))
+    ((y0, y1), (x0, x1)), _ = coors
+    source[:, :, y0:y1, x0:x1] = target[:, :, y0:y1, x0:x1]
+    return source, (y1 - y0) * (x1 - x0)
 
 # dataset
 
@@ -291,7 +292,7 @@ class AugWrapper(nn.Module):
         if detach:
             images.detach_()
 
-        return self.D(images)
+        return self.D(images), images
 
 # stylegan2 classes
 
@@ -519,6 +520,7 @@ class Discriminator(nn.Module):
         set_fmap_max = partial(min, fmap_max)
         filters = list(map(set_fmap_max, filters))
         chan_in_out = list(zip(filters[:-1], filters[1:]))
+        chan_in_out = list(map(list, chan_in_out))
 
         down_blocks = []
         attn_blocks = []
@@ -542,7 +544,11 @@ class Discriminator(nn.Module):
         self.to_logit = nn.Linear(latent_dim, 1)
 
         self.conv = double_conv(filters[-1], filters[-1])
-        self.up_blocks = nn.ModuleList(list(map(lambda c: UpBlock(c[1] * 2, c[0]), chan_in_out[:-1][::-1])))
+
+        dec_chan_in_out = chan_in_out[:-1][::-1]
+        dec_chan_in_out[-1][0] = 1
+
+        self.up_blocks = nn.ModuleList(list(map(lambda c: UpBlock(c[1] * 2, c[0]), dec_chan_in_out)))
 
     def forward(self, x):
         b, *_ = x.shape
@@ -668,7 +674,6 @@ class Trainer():
         self.g_loss = 0
         self.last_gp_loss = 0
         self.last_cr_loss = 0
-        self.q_loss = 0
 
         self.pl_length_ma = EMA(0.99)
         self.init_folders()
@@ -736,18 +741,38 @@ class Trainer():
             w_space = latent_to_w(self.GAN.S, style)
             w_styles = styles_def_to_tensor(w_space)
 
-            generated_images = self.GAN.G(w_styles, noise)
-            fake_output, _ = self.GAN.D_aug(generated_images.clone().detach(), detach = True, prob = aug_prob)
+            generated_images = self.GAN.G(w_styles, noise).clone().detach()
+            (fake_enc_out, fake_dec_out), fake_aug_images = self.GAN.D_aug(generated_images, detach = True, prob = aug_prob)
 
-            image_batch = next(self.loader).cuda()
-            image_batch.requires_grad_()
-            real_output, _ = self.GAN.D_aug(image_batch, prob = aug_prob)
+            real_images = next(self.loader).cuda()
+            real_images.requires_grad_()
+            (real_enc_out, real_dec_out), real_aug_images = self.GAN.D_aug(real_images, prob = aug_prob)
 
-            divergence = (F.relu(1 + real_output) + F.relu(1 - fake_output)).mean()
+            cutmix_coors = cutmix_coordinates(image_size, image_size)
+            cutmixed_images, cutmix_area = cutmix(real_aug_images, fake_aug_images, cutmix_coors)
+            cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmixed_images)
+
+            cutmix_fake_percent = cutmix_area / (image_size ** 2) 
+            enc_loss = ((cutmix_enc_out - cutmix_fake_percent) ** 2).mean()
+
+            cr_cutmix_dec_out, _ = cutmix(real_dec_out, fake_dec_out, cutmix_coors)
+            cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out)
+            self.last_cr_loss = cr_loss.clone().detach().item()
+
+            real_mask = torch.ones_like(real_images)
+            fake_mask = -real_mask
+            cutmix_mask, _ = cutmix(real_mask, fake_mask, cutmix_coors)
+            cutmix_divergence = F.relu(1 + cutmix_mask * cutmix_dec_out).mean()
+
+            divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
+            divergence = divergence + cutmix_divergence
+            divergence = divergence + enc_loss
+
             disc_loss = divergence
+            disc_loss = disc_loss + cr_loss
 
             if apply_gradient_penalty:
-                gp = gradient_penalty(image_batch, real_output)
+                gp = gradient_penalty(real_images, real_dec_out)
                 self.last_gp_loss = gp.clone().detach().item()
                 disc_loss = disc_loss + gp
 
@@ -763,6 +788,7 @@ class Trainer():
         # train generator
 
         self.GAN.G_opt.zero_grad()
+
         for i in range(self.gradient_accumulate_every):
             style = get_latents_fn(batch_size, num_layers, latent_dim)
             noise = image_noise(batch_size, image_size)
@@ -771,8 +797,8 @@ class Trainer():
             w_styles = styles_def_to_tensor(w_space)
 
             generated_images = self.GAN.G(w_styles, noise)
-            fake_output, _ = self.GAN.D_aug(generated_images, prob = aug_prob)
-            loss = fake_output.mean()
+            (fake_enc_output, fake_dec_output), _ = self.GAN.D_aug(generated_images, prob = aug_prob)
+            loss = fake_enc_output.mean() + fake_dec_output.mean()
             gen_loss = loss
 
             if apply_path_penalty:
@@ -927,7 +953,7 @@ class Trainer():
 
     def print_log(self):
         pl_mean = default(self.pl_mean, 0)
-        print(f'G: {self.g_loss:.2f} | D: {self.d_loss:.2f} | GP: {self.last_gp_loss:.2f} | PL: {pl_mean:.2f}')
+        print(f'G: {self.g_loss:.2f} | D: {self.d_loss:.2f} | GP: {self.last_gp_loss:.2f} | PL: {pl_mean:.2f} | CR: {self.last_cr_loss:.2f}')
 
     def model_name(self, num):
         return str(self.models_dir / self.name / f'model_{num}.pt')
