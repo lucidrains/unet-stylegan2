@@ -207,7 +207,7 @@ def cutmix(source, target, coors, alpha = 1.):
     source, target = map(torch.clone, (source, target))
     ((y0, y1), (x0, x1)), _ = coors
     source[:, :, y0:y1, x0:x1] = target[:, :, y0:y1, x0:x1]
-    return source, (y1 - y0) * (x1 - x0)
+    return source
 
 # dataset
 
@@ -428,7 +428,7 @@ class DownBlock(nn.Module):
         if self.down is not None:
             x = self.down(x)
 
-        x = (x + res) * (1 / math.sqrt(2))
+        x = x + res
         return x, unet_res
 
 class UpBlock(nn.Module):
@@ -570,7 +570,7 @@ class Discriminator(nn.Module):
             x = up_block(x, res)
 
         dec_out = self.conv_out(x)
-        return enc_out.squeeze(), dec_out.sigmoid()
+        return enc_out.squeeze(), dec_out
 
 class StyleGAN2(nn.Module):
     def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, attn_layers = [], no_const = False):
@@ -749,24 +749,16 @@ class Trainer():
             (real_enc_out, real_dec_out), real_aug_images = self.GAN.D_aug(real_images, prob = aug_prob)
 
             cutmix_coors = cutmix_coordinates(image_size, image_size)
-            cutmixed_images, cutmix_area = cutmix(real_aug_images, fake_aug_images, cutmix_coors)
+            cutmixed_images = cutmix(real_aug_images, fake_aug_images, cutmix_coors)
             cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmixed_images)
 
-            cutmix_fake_percent = cutmix_area / (image_size ** 2) 
-            enc_loss = ((cutmix_enc_out - cutmix_fake_percent) ** 2).mean()
-
-            cr_cutmix_dec_out, _ = cutmix(real_dec_out, fake_dec_out, cutmix_coors)
+            cr_cutmix_dec_out = cutmix(real_dec_out, fake_dec_out, cutmix_coors)
             cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out)
             self.last_cr_loss = cr_loss.clone().detach().item()
 
-            real_mask = torch.ones_like(real_images)
-            fake_mask = -real_mask
-            cutmix_mask, _ = cutmix(real_mask, fake_mask, cutmix_coors)
-            cutmix_divergence = F.relu(1 + cutmix_mask * cutmix_dec_out).mean()
-
-            divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
-            divergence = divergence + cutmix_divergence
-            divergence = divergence + enc_loss
+            enc_divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
+            dec_divergence = (F.relu(1 + real_dec_out) + F.relu(1 - fake_dec_out)).mean()
+            divergence = enc_divergence + dec_divergence
 
             disc_loss = divergence
             disc_loss = disc_loss + cr_loss
