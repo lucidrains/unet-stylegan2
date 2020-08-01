@@ -584,14 +584,14 @@ class Discriminator(nn.Module):
             if attn_block is not None:
                 x = attn_block(x)
 
-        x = self.conv(x)
         enc_out = self.to_logit(x)
+        x = self.conv(x)
 
         for (up_block, res) in zip(self.up_blocks, residuals[:-1][::-1]):
             x = up_block(x, res)
 
         dec_out = self.conv_out(x)
-        return enc_out.squeeze(), dec_out.sigmoid()
+        return enc_out.squeeze().sigmoid(), dec_out.sigmoid()
 
 class StyleGAN2(nn.Module):
     def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, attn_layers = [], no_const = False):
@@ -787,7 +787,7 @@ class Trainer():
             cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out)
             self.last_cr_loss = cr_loss.clone().detach().item()
 
-            enc_divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
+            enc_divergence = -(log(1 - real_enc_out) + log(fake_enc_out)).mean()
             dec_divergence = -(log(1 - real_dec_out) + log(fake_dec_out)).mean()
             divergence = enc_divergence + dec_divergence
 
@@ -795,7 +795,7 @@ class Trainer():
             disc_loss = disc_loss + cr_loss
 
             if apply_gradient_penalty:
-                gp = gradient_penalty(real_images, real_dec_out)
+                gp = gradient_penalty(real_images, real_enc_out)
                 self.last_gp_loss = gp.clone().detach().item()
                 disc_loss = disc_loss + gp
 
@@ -821,7 +821,7 @@ class Trainer():
 
             generated_images = self.GAN.G(w_styles, noise)
             (fake_enc_output, fake_dec_output), _ = self.GAN.D_aug(generated_images, prob = aug_prob)
-            loss = fake_enc_output.mean() -log(1 - fake_dec_output).mean()
+            loss = -log(1 - fake_enc_output).mean() - log(1 - fake_dec_output).mean()
             gen_loss = loss
 
             if apply_path_penalty:
