@@ -654,7 +654,7 @@ class StyleGAN2(nn.Module):
         return x
 
 class Trainer():
-    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, attn_layers = [], no_const = False, aug_prob = 0., dataset_aug_prob = 0., *args, **kwargs):
+    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, attn_layers = [], no_const = False, aug_prob = 0., dataset_aug_prob = 0., cr_weight = 0.2, *args, **kwargs):
         self.GAN_params = [args, kwargs]
         self.GAN = None
 
@@ -701,6 +701,8 @@ class Trainer():
 
         self.loader = None
         self.dataset_aug_prob = dataset_aug_prob
+
+        self.cr_weight = cr_weight
 
     def init_GAN(self):
         args, kwargs = self.GAN_params
@@ -784,7 +786,7 @@ class Trainer():
             cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmix_images)
 
             cr_cutmix_dec_out = mask_src_tgt(real_dec_out, fake_dec_out, mask)
-            cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out)
+            cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out) * self.cr_weight
             self.last_cr_loss = cr_loss.clone().detach().item()
 
             enc_divergence = -(log(1 - real_enc_out) + log(fake_enc_out)).mean()
