@@ -73,6 +73,13 @@ class Residual(nn.Module):
     def forward(self, x):
         return self.fn(x) + x
 
+class Flatten(nn.Module):
+    def __init__(self, index):
+        super().__init__()
+        self.index = index
+    def forward(self, x):
+        return x.flatten(self.index)
+
 class Rezero(nn.Module):
     def __init__(self, fn):
         super().__init__()
@@ -164,7 +171,7 @@ def image_noise(n, im_size):
     return torch.FloatTensor(n, im_size, im_size, 1).uniform_(0., 1.).cuda()
 
 def leaky_relu(p=0.2):
-    return nn.LeakyReLU(p, inplace=True)
+    return nn.LeakyReLU(p)
 
 def evaluate_in_chunks(max_batch_size, model, *args):
     split_args = list(zip(*list(map(lambda x: x.split(max_batch_size, dim=0), args))))
@@ -188,6 +195,9 @@ def slerp(val, low, high):
     res = (torch.sin((1.0 - val) * omega) / so).unsqueeze(1) * low + (torch.sin(val * omega) / so).unsqueeze(1) * high
     return res
 
+def log(t, eps = 1e-6):
+    return torch.log(t + eps)
+
 def cutmix_coordinates(height, width, alpha = 1.):
     lam = np.random.beta(alpha, alpha)
 
@@ -203,11 +213,13 @@ def cutmix_coordinates(height, width, alpha = 1.):
     return ((y0, y1), (x0, x1)), lam
 
 def cutmix(source, target, coors, alpha = 1.):
-    *_, h, w = source.shape
     source, target = map(torch.clone, (source, target))
     ((y0, y1), (x0, x1)), _ = coors
     source[:, :, y0:y1, x0:x1] = target[:, :, y0:y1, x0:x1]
     return source
+
+def mask_src_tgt(source, target, mask):
+    return source * mask + (1 - mask) * target
 
 # dataset
 
@@ -434,14 +446,18 @@ class DownBlock(nn.Module):
 class UpBlock(nn.Module):
     def __init__(self, input_channels, filters):
         super().__init__()
-
+        self.conv_res = nn.ConvTranspose2d(input_channels // 2, filters, 1, stride = 2)
         self.net = double_conv(input_channels, filters)
-        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-
+        self.up = nn.Upsample(scale_factor = 2, mode='bilinear', align_corners=False)
+        self.input_channels = input_channels
+        self.filters = filters
     def forward(self, x, res):
+        *_, h, w = x.shape
+        conv_res = self.conv_res(x, output_size = (h * 2, w * 2))
         x = self.up(x)
         x = torch.cat((x, res), dim=1)
         x = self.net(x)
+        x = x + conv_res
         return x
 
 class Generator(nn.Module):
@@ -511,7 +527,7 @@ class Generator(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, image_size, network_capacity = 16, attn_layers = [], transparent = False, fmap_max = 512):
         super().__init__()
-        num_layers = int(log2(image_size) - 1)
+        num_layers = int(log2(image_size) - 2)
         num_init_filters = 3 if not transparent else 4
 
         blocks = []
@@ -519,6 +535,8 @@ class Discriminator(nn.Module):
 
         set_fmap_max = partial(min, fmap_max)
         filters = list(map(set_fmap_max, filters))
+        filters[-1] = filters[-2]
+
         chan_in_out = list(zip(filters[:-1], filters[1:]))
         chan_in_out = list(map(list, chan_in_out))
 
@@ -539,14 +557,18 @@ class Discriminator(nn.Module):
         self.down_blocks = nn.ModuleList(down_blocks)
         self.attn_blocks = nn.ModuleList(attn_blocks)
 
-        latent_dim = 2 * 2 * filters[-1]
+        last_chan = filters[-1]
 
-        self.to_logit = nn.Linear(latent_dim, 1)
+        self.to_logit = nn.Sequential(
+            leaky_relu(),
+            nn.AvgPool2d(image_size // (2 ** num_layers)),
+            Flatten(1),
+            nn.Linear(last_chan, 1)
+        )
 
-        self.conv = double_conv(filters[-1], filters[-1])
+        self.conv = double_conv(last_chan, last_chan)
 
         dec_chan_in_out = chan_in_out[:-1][::-1]
-
         self.up_blocks = nn.ModuleList(list(map(lambda c: UpBlock(c[1] * 2, c[0]), dec_chan_in_out)))
         self.conv_out = nn.Conv2d(3, 1, 1)
 
@@ -562,15 +584,14 @@ class Discriminator(nn.Module):
             if attn_block is not None:
                 x = attn_block(x)
 
-        enc_out = self.to_logit(x.flatten(1))
-
         x = self.conv(x)
+        enc_out = self.to_logit(x)
 
         for (up_block, res) in zip(self.up_blocks, residuals[:-1][::-1]):
             x = up_block(x, res)
 
         dec_out = self.conv_out(x)
-        return enc_out.squeeze(), dec_out
+        return enc_out.squeeze(), dec_out.sigmoid()
 
 class StyleGAN2(nn.Module):
     def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, attn_layers = [], no_const = False):
@@ -749,15 +770,25 @@ class Trainer():
             (real_enc_out, real_dec_out), real_aug_images = self.GAN.D_aug(real_images, prob = aug_prob)
 
             cutmix_coors = cutmix_coordinates(image_size, image_size)
-            cutmixed_images = cutmix(real_aug_images, fake_aug_images, cutmix_coors)
-            cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmixed_images)
 
-            cr_cutmix_dec_out = cutmix(real_dec_out, fake_dec_out, cutmix_coors)
+            mask = cutmix(
+                torch.ones_like(real_dec_out),
+                torch.zeros_like(real_dec_out),
+                cutmix_coors
+            )
+
+            if random() > 0.5:
+                mask = 1 - mask
+
+            cutmix_images = mask_src_tgt(real_aug_images, fake_aug_images, mask)
+            cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmix_images)
+
+            cr_cutmix_dec_out = mask_src_tgt(real_dec_out, fake_dec_out, mask)
             cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out)
             self.last_cr_loss = cr_loss.clone().detach().item()
 
             enc_divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
-            dec_divergence = (F.relu(1 + real_dec_out) + F.relu(1 - fake_dec_out)).mean()
+            dec_divergence = -(log(1 - real_dec_out) + log(fake_dec_out)).mean()
             divergence = enc_divergence + dec_divergence
 
             disc_loss = divergence
@@ -790,7 +821,7 @@ class Trainer():
 
             generated_images = self.GAN.G(w_styles, noise)
             (fake_enc_output, fake_dec_output), _ = self.GAN.D_aug(generated_images, prob = aug_prob)
-            loss = fake_enc_output.mean() + fake_dec_output.mean()
+            loss = fake_enc_output.mean() -log(1 - fake_dec_output).mean()
             gen_loss = loss
 
             if apply_path_penalty:
