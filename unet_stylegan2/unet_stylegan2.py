@@ -451,6 +451,7 @@ class UpBlock(nn.Module):
         self.up = nn.Upsample(scale_factor = 2, mode='bilinear', align_corners=False)
         self.input_channels = input_channels
         self.filters = filters
+
     def forward(self, x, res):
         *_, h, w = x.shape
         conv_res = self.conv_res(x, output_size = (h * 2, w * 2))
@@ -461,7 +462,7 @@ class UpBlock(nn.Module):
         return x
 
 class Generator(nn.Module):
-    def __init__(self, image_size, latent_dim, network_capacity = 16, transparent = False, attn_layers = [], no_const = False, fmap_max = 512):
+    def __init__(self, image_size, latent_dim, network_capacity = 16, transparent = False, no_const = False, fmap_max = 512):
         super().__init__()
         self.image_size = image_size
         self.latent_dim = latent_dim
@@ -490,8 +491,7 @@ class Generator(nn.Module):
             not_last = ind != (self.num_layers - 1)
             num_layer = self.num_layers - ind
 
-            attn_fn = attn_and_ff(in_chan) if num_layer in attn_layers else None
-
+            attn_fn = attn_and_ff(in_chan)
             self.attns.append(attn_fn)
 
             block = GeneratorBlock(
@@ -525,9 +525,9 @@ class Generator(nn.Module):
         return rgb
 
 class Discriminator(nn.Module):
-    def __init__(self, image_size, network_capacity = 16, attn_layers = [], transparent = False, fmap_max = 512):
+    def __init__(self, image_size, network_capacity = 16, transparent = False, fmap_max = 512):
         super().__init__()
-        num_layers = int(log2(image_size) - 3)
+        num_layers = int(log2(image_size) - 2)
         num_init_filters = 3 if not transparent else 4
 
         blocks = []
@@ -550,8 +550,7 @@ class Discriminator(nn.Module):
             block = DownBlock(in_chan, out_chan, downsample = is_not_last)
             down_blocks.append(block)
 
-            attn_fn = attn_and_ff(out_chan) if num_layer in attn_layers else None
-
+            attn_fn = attn_and_ff(out_chan)
             attn_blocks.append(attn_fn)
 
         self.down_blocks = nn.ModuleList(down_blocks)
@@ -594,18 +593,18 @@ class Discriminator(nn.Module):
         return enc_out.squeeze().sigmoid(), dec_out.sigmoid()
 
 class StyleGAN2(nn.Module):
-    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, attn_layers = [], no_const = False):
+    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, no_const = False):
         super().__init__()
         self.lr = lr
         self.steps = steps
         self.ema_updater = EMA(0.995)
 
         self.S = StyleVectorizer(latent_dim, style_depth)
-        self.G = Generator(image_size, latent_dim, network_capacity, transparent = transparent, attn_layers = attn_layers, no_const = no_const, fmap_max = fmap_max)
-        self.D = Discriminator(image_size, network_capacity, attn_layers = attn_layers, transparent = transparent, fmap_max = fmap_max)
+        self.G = Generator(image_size, latent_dim, network_capacity, transparent = transparent, no_const = no_const, fmap_max = fmap_max)
+        self.D = Discriminator(image_size, network_capacity, transparent = transparent, fmap_max = fmap_max)
 
         self.SE = StyleVectorizer(latent_dim, style_depth)
-        self.GE = Generator(image_size, latent_dim, network_capacity, transparent = transparent, attn_layers = attn_layers, no_const = no_const)
+        self.GE = Generator(image_size, latent_dim, network_capacity, transparent = transparent, no_const = no_const)
 
         # wrapper for augmenting all images going into the discriminator
         self.D_aug = AugWrapper(self.D, image_size)
@@ -654,7 +653,7 @@ class StyleGAN2(nn.Module):
         return x
 
 class Trainer():
-    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, attn_layers = [], no_const = False, aug_prob = 0., dataset_aug_prob = 0., cr_weight = 0.2, *args, **kwargs):
+    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, no_const = False, aug_prob = 0., dataset_aug_prob = 0., cr_weight = 0.2, *args, **kwargs):
         self.GAN_params = [args, kwargs]
         self.GAN = None
 
@@ -667,8 +666,7 @@ class Trainer():
         self.image_size = image_size
         self.network_capacity = network_capacity
         self.transparent = transparent
-        
-        self.attn_layers = cast_list(attn_layers)
+
         self.no_const = no_const
         self.aug_prob = aug_prob
 
@@ -706,7 +704,7 @@ class Trainer():
 
     def init_GAN(self):
         args, kwargs = self.GAN_params
-        self.GAN = StyleGAN2(lr = self.lr, ttur_mult = self.ttur_mult, image_size = self.image_size, network_capacity = self.network_capacity, transparent = self.transparent, attn_layers = self.attn_layers, fp16 = self.fp16, no_const = self.no_const, *args, **kwargs)
+        self.GAN = StyleGAN2(lr = self.lr, ttur_mult = self.ttur_mult, image_size = self.image_size, network_capacity = self.network_capacity, transparent = self.transparent, fp16 = self.fp16, no_const = self.no_const, *args, **kwargs)
 
     def write_config(self):
         self.config_path.write_text(json.dumps(self.config()))
@@ -716,13 +714,12 @@ class Trainer():
         self.image_size = config['image_size']
         self.network_capacity = config['network_capacity']
         self.transparent = config['transparent']
-        self.attn_layers = config.pop('attn_layers', [])
         self.no_const = config.pop('no_const', False)
         del self.GAN
         self.init_GAN()
 
     def config(self):
-        return {'image_size': self.image_size, 'network_capacity': self.network_capacity, 'transparent': self.transparent, 'attn_layers': self.attn_layers, 'no_const': self.no_const}
+        return {'image_size': self.image_size, 'network_capacity': self.network_capacity, 'transparent': self.transparent, 'no_const': self.no_const}
 
     def set_data_src(self, folder):
         self.dataset = Dataset(folder, self.image_size, transparent = self.transparent, aug_prob = self.dataset_aug_prob)
