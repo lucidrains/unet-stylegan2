@@ -564,7 +564,6 @@ class Discriminator(nn.Module):
         last_chan = filters[-1]
 
         self.to_logit = nn.Sequential(
-            nn.Conv2d(last_chan, last_chan, 3, padding = 1),
             leaky_relu(),
             nn.AvgPool2d(image_size // (2 ** num_layers)),
             Flatten(1),
@@ -589,8 +588,8 @@ class Discriminator(nn.Module):
             if attn_block is not None:
                 x = attn_block(x)
 
+        x = self.conv(x) + x
         enc_out = self.to_logit(x)
-        x = self.conv(x)
 
         for (up_block, res) in zip(self.up_blocks, residuals[:-1][::-1]):
             x = up_block(x, res)
@@ -777,20 +776,6 @@ class Trainer():
             real_images.requires_grad_()
             (real_enc_out, real_dec_out), real_aug_images = self.GAN.D_aug(real_images, prob = aug_prob)
 
-            cutmix_coors = cutmix_coordinates(image_size, image_size)
-
-            mask = cutmix(
-                torch.ones_like(real_dec_out),
-                torch.zeros_like(real_dec_out),
-                cutmix_coors
-            )
-
-            if random() > 0.5:
-                mask = 1 - mask
-
-            cutmix_images = mask_src_tgt(real_aug_images, fake_aug_images, mask)
-            cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmix_images)
-
             enc_divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
             dec_divergence = -(log(1 - real_dec_out) + log(fake_dec_out)).mean()
             divergence = enc_divergence + dec_divergence
@@ -798,6 +783,18 @@ class Trainer():
             disc_loss = divergence
 
             if apply_cutmix:
+                mask = cutmix(
+                    torch.ones_like(real_dec_out),
+                    torch.zeros_like(real_dec_out),
+                    cutmix_coordinates(image_size, image_size)
+                )
+
+                if random() > 0.5:
+                    mask = 1 - mask
+
+                cutmix_images = mask_src_tgt(real_aug_images, fake_aug_images, mask)
+                cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmix_images)
+
                 cutmix_enc_divergence = F.relu(1 - cutmix_enc_out).mean()
                 cutmix_dec_divergence =  F.binary_cross_entropy(cutmix_dec_out.flatten(1), (1 - mask).flatten(1), reduction='mean')
                 disc_loss = disc_loss + cutmix_enc_divergence + cutmix_dec_divergence
@@ -809,7 +806,7 @@ class Trainer():
                 disc_loss = disc_loss + cr_loss
 
             if apply_gradient_penalty:
-                gp = gradient_penalty(real_images, real_dec_out)
+                gp = gradient_penalty(real_images, real_enc_out)
                 self.last_gp_loss = gp.clone().detach().item()
                 disc_loss = disc_loss + gp
 
