@@ -31,7 +31,7 @@ def train_from_folder(
     no_const = False,
     aug_prob = 0.,
     dataset_aug_prob = 0.,
-    cr_weight = 0.2
+    cr_weight = 0.5
 ):
     model = Trainer(
         name,        

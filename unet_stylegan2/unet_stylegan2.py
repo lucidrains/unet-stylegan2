@@ -195,6 +195,11 @@ def slerp(val, low, high):
     res = (torch.sin((1.0 - val) * omega) / so).unsqueeze(1) * low + (torch.sin(val * omega) / so).unsqueeze(1) * high
     return res
 
+def warmup(start, end, max_steps, current_step):
+    if current_step > max_steps:
+        return end
+    return (end - start) * (current_step / max_steps) + start
+
 def log(t, eps = 1e-6):
     return torch.log(t + eps)
 
@@ -744,7 +749,10 @@ class Trainer():
         aug_prob   = self.aug_prob
 
         apply_gradient_penalty = self.steps % 4 == 0
-        apply_path_penalty = self.steps % 32 == 0        
+        apply_path_penalty = self.steps % 32 == 0
+
+        cutmix_prob = warmup(0, 0.5, 30000, self.steps)
+        apply_cutmix = random() < cutmix_prob
 
         backwards = partial(loss_backwards, self.fp16)
 
@@ -782,16 +790,22 @@ class Trainer():
             cutmix_images = mask_src_tgt(real_aug_images, fake_aug_images, mask)
             cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmix_images)
 
-            cr_cutmix_dec_out = mask_src_tgt(real_dec_out, fake_dec_out, mask)
-            cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out) * self.cr_weight
-            self.last_cr_loss = cr_loss.clone().detach().item()
-
             enc_divergence = -(log(1 - real_enc_out) + log(fake_enc_out)).mean()
             dec_divergence = -(log(1 - real_dec_out) + log(fake_dec_out)).mean()
             divergence = enc_divergence + dec_divergence
 
             disc_loss = divergence
-            disc_loss = disc_loss + cr_loss
+
+            if apply_cutmix:
+                cutmix_enc_divergence = -log(cutmix_enc_out).mean()
+                cutmix_dec_divergence =  F.binary_cross_entropy(cutmix_dec_out.flatten(1), (1 - mask).flatten(1), reduction='mean')
+                disc_loss = disc_loss + cutmix_enc_divergence + cutmix_dec_divergence
+
+                cr_cutmix_dec_out = mask_src_tgt(real_dec_out, fake_dec_out, mask)
+                cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out) * self.cr_weight
+                self.last_cr_loss = cr_loss.clone().detach().item()
+
+                disc_loss = disc_loss + cr_loss
 
             if apply_gradient_penalty:
                 gp = gradient_penalty(real_images, real_enc_out)
