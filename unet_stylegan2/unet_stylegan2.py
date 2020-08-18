@@ -313,13 +313,25 @@ class AugWrapper(nn.Module):
 
 # stylegan2 classes
 
+class EqualLinear(nn.Module):
+    def __init__(self, in_dim, out_dim, lr_mul = 1, bias = True):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(out_dim, in_dim))
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(out_dim))
+
+        self.lr_mul = lr_mul
+
+    def forward(self, input):
+        return F.linear(input, self.weight * self.lr_mul, bias=self.bias * self.lr_mul)
+
 class StyleVectorizer(nn.Module):
-    def __init__(self, emb, depth):
+    def __init__(self, emb, depth, lr_mul = 0.1):
         super().__init__()
 
         layers = []
         for i in range(depth):
-            layers.extend([nn.Linear(emb, emb), leaky_relu()])
+            layers.extend([EqualLinear(emb, emb, lr_mul), leaky_relu()])
 
         self.net = nn.Sequential(*layers)
 
@@ -599,17 +611,17 @@ class Discriminator(nn.Module):
         return enc_out.squeeze(), dec_out.sigmoid()
 
 class StyleGAN2(nn.Module):
-    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, no_const = False):
+    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, no_const = False, lr_mul = 0.1):
         super().__init__()
         self.lr = lr
         self.steps = steps
         self.ema_updater = EMA(0.995)
 
-        self.S = StyleVectorizer(latent_dim, style_depth)
+        self.S = StyleVectorizer(latent_dim, style_depth, lr_mul = lr_mul)
         self.G = Generator(image_size, latent_dim, network_capacity, transparent = transparent, no_const = no_const, fmap_max = fmap_max)
         self.D = Discriminator(image_size, network_capacity, transparent = transparent, fmap_max = fmap_max)
 
-        self.SE = StyleVectorizer(latent_dim, style_depth)
+        self.SE = StyleVectorizer(latent_dim, style_depth, lr_mul = lr_mul)
         self.GE = Generator(image_size, latent_dim, network_capacity, transparent = transparent, no_const = no_const)
 
         # wrapper for augmenting all images going into the discriminator
@@ -659,7 +671,7 @@ class StyleGAN2(nn.Module):
         return x
 
 class Trainer():
-    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, no_const = False, aug_prob = 0., dataset_aug_prob = 0., cr_weight = 0.2, *args, **kwargs):
+    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, no_const = False, aug_prob = 0., dataset_aug_prob = 0., cr_weight = 0.2, lr_mul = 0.1, *args, **kwargs):
         self.GAN_params = [args, kwargs]
         self.GAN = None
 
@@ -678,6 +690,7 @@ class Trainer():
 
         self.lr = lr
         self.ttur_mult = ttur_mult
+        self.lr_mul = lr_mul
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.mixed_prob = mixed_prob
@@ -710,7 +723,7 @@ class Trainer():
 
     def init_GAN(self):
         args, kwargs = self.GAN_params
-        self.GAN = StyleGAN2(lr = self.lr, ttur_mult = self.ttur_mult, image_size = self.image_size, network_capacity = self.network_capacity, transparent = self.transparent, fp16 = self.fp16, no_const = self.no_const, *args, **kwargs)
+        self.GAN = StyleGAN2(lr = self.lr, ttur_mult = self.ttur_mult, lr_mul = self.lr_mul, image_size = self.image_size, network_capacity = self.network_capacity, transparent = self.transparent, fp16 = self.fp16, no_const = self.no_const, *args, **kwargs)
 
     def write_config(self):
         self.config_path.write_text(json.dumps(self.config()))
