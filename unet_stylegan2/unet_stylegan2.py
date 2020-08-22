@@ -762,7 +762,7 @@ class Trainer():
 
         aug_prob   = self.aug_prob
 
-        apply_gradient_penalty = self.steps % 4 == 0
+        apply_gradient_penalty = self.steps < 4000 or self.steps % 4 == 0
         apply_path_penalty = self.steps % 32 == 0
 
         cutmix_prob = warmup(0, 0.25, 30000, self.steps)
