@@ -608,7 +608,7 @@ class Discriminator(nn.Module):
             x = up_block(x, res)
 
         dec_out = self.conv_out(x)
-        return enc_out.squeeze(), dec_out.sigmoid()
+        return enc_out.squeeze(), dec_out
 
 class StyleGAN2(nn.Module):
     def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, no_const = False, lr_mul = 0.1):
@@ -791,7 +791,7 @@ class Trainer():
             (real_enc_out, real_dec_out), real_aug_images = self.GAN.D_aug(real_images, prob = aug_prob)
 
             enc_divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
-            dec_divergence = -(log(1 - real_dec_out) + log(fake_dec_out)).mean()
+            dec_divergence = (F.relu(1 + real_dec_out) + F.relu(1 - fake_dec_out)).mean()
             divergence = enc_divergence + dec_divergence
 
             disc_loss = divergence
@@ -810,7 +810,7 @@ class Trainer():
                 cutmix_enc_out, cutmix_dec_out = self.GAN.D(cutmix_images)
 
                 cutmix_enc_divergence = F.relu(1 - cutmix_enc_out).mean()
-                cutmix_dec_divergence =  F.binary_cross_entropy(cutmix_dec_out.flatten(1), (1 - mask).flatten(1), reduction='mean')
+                cutmix_dec_divergence =  F.relu(1 + (mask * 2 - 1) * cutmix_dec_out).mean()
                 disc_loss = disc_loss + cutmix_enc_divergence + cutmix_dec_divergence
 
                 cr_cutmix_dec_out = mask_src_tgt(real_dec_out, fake_dec_out, mask)
@@ -846,7 +846,7 @@ class Trainer():
 
             generated_images = self.GAN.G(w_styles, noise)
             (fake_enc_output, fake_dec_output), _ = self.GAN.D_aug(generated_images, prob = aug_prob)
-            loss = fake_enc_output.mean() - log(1 - fake_dec_output).mean()
+            loss = fake_enc_output.mean() + F.relu(1 + fake_dec_output).mean()
             gen_loss = loss
 
             if apply_path_penalty:
