@@ -134,10 +134,10 @@ def loss_backwards(fp16, loss, optimizer, **kwargs):
     else:
         loss.backward(**kwargs)
 
-def gradient_penalty(images, output, weight = 10):
+def gradient_penalty(images, outputs, weight = 10):
     batch_size = images.shape[0]
-    gradients = torch_grad(outputs=output, inputs=images,
-                           grad_outputs=torch.ones(output.size()).cuda(),
+    gradients = torch_grad(outputs=outputs, inputs=images,
+                           grad_outputs=list(map(lambda t: torch.ones(t.size()).cuda(), outputs)),
                            create_graph=True, retain_graph=True, only_inputs=True)[0]
 
     gradients = gradients.view(batch_size, -1)
@@ -820,7 +820,7 @@ class Trainer():
                 disc_loss = disc_loss + cr_loss
 
             if apply_gradient_penalty:
-                gp = gradient_penalty(real_images, real_enc_out)
+                gp = gradient_penalty(real_images, (real_enc_out, real_dec_out))
                 self.last_gp_loss = gp.clone().detach().item()
                 disc_loss = disc_loss + gp
 
