@@ -501,6 +501,8 @@ class Generator(nn.Module):
         else:
             self.initial_block = nn.Parameter(torch.randn((1, init_channels, 4, 4)))
 
+        self.initial_conv = nn.Conv2d(filters[0], filters[0], 3, padding=1)
+
         self.blocks = nn.ModuleList([])
         self.attns = nn.ModuleList([])
 
@@ -532,6 +534,7 @@ class Generator(nn.Module):
         else:
             x = self.initial_block.expand(batch_size, -1, -1, -1)
 
+        x = self.initial_conv(x)
         styles = styles.transpose(0, 1)
 
         rgb = None
