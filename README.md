@@ -8,7 +8,7 @@ An implementation of Stylegan2 with UNet Discriminator. This repository works la
 
 <img src="./samples/flowers-mr.jpg"></img>
 
-Update: Experimentla results have been very good. Will need to investigate combining this with a few other techniques, and then I will write up full instructions for use.
+Update: Results have been very good. Will need to investigate combining this with a few other techniques, and then I will write up full instructions for use.
 
 ## Install
 
