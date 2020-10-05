@@ -4,7 +4,7 @@ setup(
   name = 'unet_stylegan2',
   packages = find_packages(),
   scripts=['bin/unet_stylegan2'],
-  version = '0.3.1',
+  version = '0.4.0',
   license='GPLv3+',
   description = 'StyleGan2 with UNet Discriminator, in Pytorch',
   author = 'Phil Wang',
@@ -19,8 +19,7 @@ setup(
       'torch',
       'torchvision',
       'pillow',
-      'torch_optimizer',
-      'linear_attention_transformer'
+      'linear_attention_transformer>=0.12.1'
   ],
   classifiers=[
       'Development Status :: 4 - Beta',

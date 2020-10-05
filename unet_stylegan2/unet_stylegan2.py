@@ -16,7 +16,7 @@ from torch import nn
 from torch.utils import data
 import torch.nn.functional as F
 
-from torch_optimizer import AdamP
+from torch.optim import Adam
 from torch.autograd import grad as torch_grad
 
 import torchvision
@@ -101,7 +101,7 @@ class PermuteToFrom(nn.Module):
 # one layer of self-attention and feedforward, for images
 
 attn_and_ff = lambda chan: nn.Sequential(*[
-    Residual(Rezero(ImageLinearAttention(chan))),
+    Residual(Rezero(ImageLinearAttention(chan, norm_queries = False))),
     Residual(Rezero(nn.Sequential(nn.Conv2d(chan, chan * 2, 1), leaky_relu(), nn.Conv2d(chan * 2, chan, 1))))
 ])
 
@@ -634,8 +634,8 @@ class StyleGAN2(nn.Module):
         set_requires_grad(self.GE, False)
 
         generator_params = list(self.G.parameters()) + list(self.S.parameters())
-        self.G_opt = AdamP(generator_params, lr = self.lr, betas=(0.5, 0.9))
-        self.D_opt = AdamP(self.D.parameters(), lr = self.lr * ttur_mult, betas=(0.5, 0.9))
+        self.G_opt = Adam(generator_params, lr = self.lr, betas=(0.5, 0.9))
+        self.D_opt = Adam(self.D.parameters(), lr = self.lr * ttur_mult, betas=(0.5, 0.9))
 
         self._init_weights()
         self.reset_parameter_averaging()
