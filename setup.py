@@ -4,7 +4,7 @@ setup(
   name = 'unet_stylegan2',
   packages = find_packages(),
   scripts=['bin/unet_stylegan2'],
-  version = '0.4.0',
+  version = '0.4.1',
   license='GPLv3+',
   description = 'StyleGan2 with UNet Discriminator, in Pytorch',
   author = 'Phil Wang',
