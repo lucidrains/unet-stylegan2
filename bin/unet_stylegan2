@@ -15,8 +15,8 @@ def train_from_folder(
     image_size = 128,
     network_capacity = 32,
     transparent = False,
-    batch_size = 3,
-    gradient_accumulate_every = 5,
+    batch_size = 12,
+    gradient_accumulate_every = 3,
     num_train_steps = 150000,
     learning_rate = 2e-4,
     ttur_mult = 2,
@@ -31,7 +31,8 @@ def train_from_folder(
     no_const = False,
     aug_prob = 0.,
     dataset_aug_prob = 0.,
-    cr_weight = 0.5
+    cr_weight = 0.5,
+    apply_pl_reg = False
 ):
     model = Trainer(
         name,        
@@ -51,7 +52,8 @@ def train_from_folder(
         no_const = no_const,
         aug_prob = aug_prob,
         dataset_aug_prob = dataset_aug_prob,
-        cr_weight = cr_weight
+        cr_weight = cr_weight,
+        apply_pl_reg = apply_pl_reg
     )
 
     if not new:

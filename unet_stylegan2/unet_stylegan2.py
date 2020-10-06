@@ -674,7 +674,7 @@ class StyleGAN2(nn.Module):
         return x
 
 class Trainer():
-    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, no_const = False, aug_prob = 0., dataset_aug_prob = 0., cr_weight = 0.2, lr_mul = 0.1, *args, **kwargs):
+    def __init__(self, name, results_dir, models_dir, image_size, network_capacity, transparent = False, batch_size = 4, mixed_prob = 0.9, gradient_accumulate_every=1, lr = 2e-4, ttur_mult = 2, num_workers = None, save_every = 1000, trunc_psi = 0.6, fp16 = False, no_const = False, aug_prob = 0., dataset_aug_prob = 0., cr_weight = 0.2, apply_pl_reg = False, lr_mul = 0.1, *args, **kwargs):
         self.GAN_params = [args, kwargs]
         self.GAN = None
 
@@ -704,6 +704,7 @@ class Trainer():
         self.av = None
         self.trunc_psi = trunc_psi
 
+        self.apply_pl_reg = apply_pl_reg
         self.pl_mean = None
 
         self.gradient_accumulate_every = gradient_accumulate_every
@@ -766,7 +767,7 @@ class Trainer():
         aug_prob   = self.aug_prob
 
         apply_gradient_penalty = self.steps < 4000 or self.steps % 4 == 0
-        apply_path_penalty = self.steps % 32 == 0
+        apply_path_penalty = self.apply_pl_reg and self.steps % 32 == 0
 
         cutmix_prob = warmup(0, 0.25, 30000, self.steps)
         apply_cutmix = random() < cutmix_prob
