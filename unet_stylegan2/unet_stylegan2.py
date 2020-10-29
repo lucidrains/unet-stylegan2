@@ -33,6 +33,8 @@ try:
 except:
     APEX_AVAILABLE = False
 
+from unet_stylegan2.diff_augment import DiffAugment
+
 assert torch.cuda.is_available(), 'You need to have an Nvidia GPU with CUDA installed.'
 
 num_cores = multiprocessing.cpu_count()
@@ -140,7 +142,7 @@ def gradient_penalty(images, outputs, weight = 10):
                            grad_outputs=list(map(lambda t: torch.ones(t.size()).cuda(), outputs)),
                            create_graph=True, retain_graph=True, only_inputs=True)[0]
 
-    gradients = gradients.view(batch_size, -1)
+    gradients = gradients.reshape(batch_size, -1)
     return weight * ((gradients.norm(2, dim=1) - 1) ** 2).mean()
 
 def calc_pl_lengths(styles, images):
@@ -296,15 +298,15 @@ def random_hflip(tensor, prob):
     return torch.flip(tensor, dims=(3,))
 
 class AugWrapper(nn.Module):
-    def __init__(self, D, image_size):
+    def __init__(self, D, image_size, types):
         super().__init__()
         self.D = D
+        self.types = types
 
     def forward(self, images, prob = 0., detach = False):
         if random() < prob:
-            random_scale = random_float(0.5, 0.9)
             images = random_hflip(images, prob=0.5)
-            images = random_crop_and_resize(images, scale = random_scale)
+            images = DiffAugment(images, types=self.types)
 
         if detach:
             images.detach_()
@@ -614,7 +616,7 @@ class Discriminator(nn.Module):
         return enc_out.squeeze(), dec_out
 
 class StyleGAN2(nn.Module):
-    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, no_const = False, lr_mul = 0.1):
+    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, steps = 1, lr = 1e-4, ttur_mult = 2, no_const = False, lr_mul = 0.1, aug_types = ['translation', 'cutout']):
         super().__init__()
         self.lr = lr
         self.steps = steps
@@ -628,7 +630,7 @@ class StyleGAN2(nn.Module):
         self.GE = Generator(image_size, latent_dim, network_capacity, transparent = transparent, no_const = no_const)
 
         # wrapper for augmenting all images going into the discriminator
-        self.D_aug = AugWrapper(self.D, image_size)
+        self.D_aug = AugWrapper(self.D, image_size, aug_types)
 
         set_requires_grad(self.SE, False)
         set_requires_grad(self.GE, False)

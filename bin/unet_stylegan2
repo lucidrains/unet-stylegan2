@@ -32,7 +32,8 @@ def train_from_folder(
     aug_prob = 0.,
     dataset_aug_prob = 0.,
     cr_weight = 0.5,
-    apply_pl_reg = False
+    apply_pl_reg = False,
+    aug_types = ['translation', 'cutout']
 ):
     model = Trainer(
         name,        
@@ -51,6 +52,7 @@ def train_from_folder(
         fp16 = fp16,        
         no_const = no_const,
         aug_prob = aug_prob,
+        aug_types = aug_types,
         dataset_aug_prob = dataset_aug_prob,
         cr_weight = cr_weight,
         apply_pl_reg = apply_pl_reg
