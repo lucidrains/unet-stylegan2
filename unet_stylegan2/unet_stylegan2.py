@@ -90,16 +90,6 @@ class Rezero(nn.Module):
     def forward(self, x):
         return self.fn(x) * self.g
 
-class PermuteToFrom(nn.Module):
-    def __init__(self, fn):
-        super().__init__()
-        self.fn = fn
-    def forward(self, x):
-        x = x.permute(0, 2, 3, 1)
-        out, loss = self.fn(x)
-        out = out.permute(0, 3, 1, 2)
-        return out, loss
-
 # one layer of self-attention and feedforward, for images
 
 attn_and_ff = lambda chan: nn.Sequential(*[
@@ -771,6 +761,7 @@ class Trainer():
         apply_gradient_penalty = self.steps < 4000 or self.steps % 4 == 0
         apply_path_penalty = self.apply_pl_reg and self.steps % 32 == 0
 
+        dec_loss_coef = warmup(0, 1., 30000, self.steps)
         cutmix_prob = warmup(0, 0.25, 30000, self.steps)
         apply_cutmix = random() < cutmix_prob
 
@@ -798,7 +789,7 @@ class Trainer():
 
             enc_divergence = (F.relu(1 + real_enc_out) + F.relu(1 - fake_enc_out)).mean()
             dec_divergence = (F.relu(1 + real_dec_out) + F.relu(1 - fake_dec_out)).mean()
-            divergence = enc_divergence + dec_divergence
+            divergence = enc_divergence + dec_divergence * dec_loss_coef
 
             disc_loss = divergence
 
@@ -823,10 +814,13 @@ class Trainer():
                 cr_loss = F.mse_loss(cutmix_dec_out, cr_cutmix_dec_out) * self.cr_weight
                 self.last_cr_loss = cr_loss.clone().detach().item()
 
-                disc_loss = disc_loss + cr_loss
+                disc_loss = disc_loss + cr_loss * dec_loss_coef
 
             if apply_gradient_penalty:
-                gp = gradient_penalty(real_images, (real_enc_out, real_dec_out))
+                if random() < 0.5:
+                    gp = gradient_penalty(real_images, (real_enc_out,))
+                else:
+                    gp = gradient_penalty(real_images, (real_dec_out,)) * dec_loss_coef
                 self.last_gp_loss = gp.clone().detach().item()
                 disc_loss = disc_loss + gp
 
